@@ -5,7 +5,8 @@ import (
 )
 
 var (
-	productions map[string][][]string = map[string][][]string{
+	startSymbol = "expr"
+	productions = map[string][][]string{
 		"expr": {
 			{"term", "expr'"}},
 		"expr'": {
@@ -37,40 +38,80 @@ var (
 	"exp": {
 		{"0"},
 		{"1"}}}*/
-	nonTerminals, terminals []string
-	firsts                  map[string][][]string = make(map[string][][]string)
-	follows                 map[string][]string   = make(map[string][]string)
-	productionsStack        map[string][][]string = productions
-	null                    map[string]bool       = make(map[string]bool)
+	firstsLog               = make(map[string][]bool)
+	followsLog              = make(map[string][]bool)
+	followsPos              = make(map[string]map[string][]int)
+	nonTerminals, terminals = Set{}, Set{}
+	firsts                  = make(map[string]Set)
+	follows                 = make(map[string]Set)
+	null                    = make(map[string]bool)
 )
+
+type Set map[string]struct{}
+
+func NewSet(i ...string) Set {
+	s := Set{}
+	for _, x := range i {
+		s[x] = struct{}{}
+	}
+	return s
+}
+
+func (s Set) String() string {
+	str := "[ "
+	for i := range s {
+		str += i + " "
+	}
+	return str + "]"
+}
+
+func (a Set) has(s string) bool {
+	_, ok := a[s]
+	return ok
+}
+
+func (a Set) insert(s string) {
+	a[s] = struct{}{}
+}
+
+func (a Set) union(b Set) Set {
+	r := Set{}
+	for i := range a {
+		r[i] = struct{}{}
+	}
+	for i := range b {
+		r[i] = struct{}{}
+	}
+	return r
+}
 
 func main() {
 	makeNonTerminals()
 	makeTerminals()
 	makeNulls()
-	fmt.Println(nonTerminals)
-	fmt.Println(terminals)
-	fmt.Println(null)
+	fmt.Println("nonTerminal\n", nonTerminals)
+	fmt.Println("terminal\n", terminals)
+	fmt.Println("Null\n", null)
 
 	makeFirsts()
-	fmt.Println(firsts)
+	fmt.Println("First\n", firsts)
 
 	makeFollows()
-	fmt.Println(follows)
+	fmt.Println("Follows\n", follows)
 }
 
 func makeNonTerminals() {
-	for nonTerminal, _ := range productions {
-		nonTerminals = append(nonTerminals, nonTerminal)
+	for nonTerminal := range productions {
+		nonTerminals.insert(nonTerminal)
 	}
 }
 
 func makeTerminals() {
-	for _, or := range productions {
-		for _, production := range or {
+	for nonTerminal := range nonTerminals {
+		for _, production := range productions[nonTerminal] {
 			for _, token := range production {
-				if _, k := productions[token]; !k && token != "epsilon" {
-					terminals = append(terminals, token)
+				if !nonTerminals.has(token) && token != "epsilon" {
+					terminals.insert(token)
 				}
 			}
 		}
@@ -78,7 +119,7 @@ func makeTerminals() {
 }
 
 func makeNulls() {
-	for _, nonTerminal := range nonTerminals {
+	for nonTerminal := range nonTerminals {
 		if _, exist := null[nonTerminal]; exist {
 			continue
 		}
@@ -87,164 +128,176 @@ func makeNulls() {
 }
 
 func makeNull(nonTerminal string) bool {
-	hasTerminal := false
-	hasEpsilon := false
-	productionNT := [][]string{}
-	for I, production := range productions[nonTerminal] {
-		productionNT = append(productionNT, []string{})
+	//A -> B|C|epsilon, Null(A) = T
+	for _, production := range productions[nonTerminal] {
 		if len(production) == 1 && production[0] == "epsilon" {
-			hasEpsilon = true
+			return true
 		}
+	}
+	var (
+		isBorC_Null  = false
+		isBandC_Null = true
+	)
+	//A -> B|C, Null(A) = Null(B) || Null(C)
+	for _, production := range productions[nonTerminal] {
+		isBandC_Null = true
+		//A -> BC, Null(A) = Null(B) && Null(C)
 		for _, token := range production {
-			switch {
-			case contains(token, terminals):
-				hasTerminal = true
-			case contains(token, nonTerminals):
-				productionNT[I] = append(productionNT[I], token)
+			//A -> Ba|xC, since a and x, Null(A) = F
+			if terminals.has(token) {
+				isBandC_Null = false
+				break
 			}
+			if _, exist := null[token]; !exist {
+				null[token] = makeNull(token)
+			}
+			isBandC_Null = isBandC_Null && null[token]
 		}
+		isBorC_Null = isBorC_Null || isBandC_Null
 	}
-	if !hasTerminal && !hasEpsilon {
-		isNull := []bool{}
-		for I, production := range productionNT {
-			for i, token := range production {
-				if _, exist := null[token]; exist {
-					if i == 0 {
-						isNull = append(isNull, null[token])
-					} else {
-						isNull[I] = isNull[I] && null[token]
-					}
-					continue
-				}
-				if i == 0 {
-					isNull = append(isNull, makeNull(token))
-					null[token] = isNull[I]
-				} else {
-					null[token] = makeNull(token)
-					isNull[I] = isNull[I] && null[token]
-				}
-			}
-			if I >= 1 {
-				isNull[I] = isNull[I] || isNull[I-1]
-			}
-		}
-		return isNull[len(isNull)-1]
-	}
-	return hasEpsilon || !hasTerminal
+	return isBorC_Null
 }
 
 func makeFirsts() {
-	iOfOr := -2
-	for nonTerminal, or := range productions {
-		first(nonTerminal, or, iOfOr)
+	//init firstsLog = {expr:{false}, expr':{false, false}...}
+	for nonTerminal := range nonTerminals {
+		for i := 0; i < len(productions[nonTerminal]); i++ {
+			firstsLog[nonTerminal] = append(
+				firstsLog[nonTerminal], false)
+		}
+	}
+	for nonTerminal := range nonTerminals {
+		firstFinded := true
+		for _, ok := range firstsLog[nonTerminal] {
+			if !ok {
+				firstFinded = false
+			}
+		}
+		if firstFinded {
+			continue
+		}
+		s := NewSet()
+		for i, production := range productions[nonTerminal] {
+			s = s.union(first(nonTerminal, production, i))
+		}
+		firsts[nonTerminal] = s
 	}
 }
 
-/*iOfOr, len(firsts[nonT]), -1
--2 != 0 -1 add in new first
--2 != 1 -1 add in new first
--2 != 1 -1 add in new first
-
-0 != 0 -1 add in new first
-0 == 1 -1 add in old first
-0 == 1 -1 add in old first
-
-1 != 1 -1
-1 == 2 -1
-1 == 2 -1
-
-2 != 2 -1
-2 == 3 -1
-2 == 3 -1*/
-
-func first(nonTerminal string, or [][]string, iOfOr int) {
-	for i, production := range or {
-		firstToken := production[0]
-		switch {
-		case contains(firstToken, nonTerminals):
-			first(nonTerminal, productions[firstToken], i)
-		case firstToken == "epsilon": //epsilon isn't terminal, but in first
-			fallthrough
-		case contains(firstToken, terminals):
-			if iOfOr == len(firsts[nonTerminal])-1 {
-				firsts[nonTerminal][iOfOr] = append(
-					firsts[nonTerminal][iOfOr], firstToken)
-			} else {
-				firsts[nonTerminal] = append(firsts[nonTerminal],
-					[]string{firstToken})
-			}
-		}
+func first(nonTerminal string, production []string, I int) Set {
+	if nonTerminals.has(nonTerminal) {
+		firstsLog[nonTerminal][I] = true
 	}
+	s := NewSet()
+	//first() = {}
+	if len(production) == 0 {
+		return s
+	}
+	//first(epsilon) = {}
+	if len(production) == 1 && production[0] == "epsilon" {
+		return s
+	}
+	//first(a beta) = {a}
+	if terminals.has(production[0]) {
+		s.insert(production[0])
+		return s
+	}
+	//first(alpha beta) = ?
+	for i, token := range production {
+		//if Null(alpha) = F, first(alpha beta) = first(alpha)
+		if !null[token] {
+			if firstsLog[token][i] {
+				return firsts[token]
+			}
+			//first(alpha) = first(alpha1) U ... U first(alpha n)
+			for i, production := range productions[token] {
+				s = s.union(first(token, production, i))
+			}
+			firsts[token] = s
+			return s
+		}
+		//if Null(alpha) = T,
+		// first(alpha beta) = first(alpha) U first(beta)
+		if firstsLog[token][i] {
+			s = s.union(firsts[token])
+			continue
+		}
+		s2 := NewSet()
+		//first(beta) = first(beta1) U ... U first(beta n)
+		for i, production := range productions[token] {
+			s2 = s2.union(first(token, production, i))
+		}
+		firsts[token] = s2
+		s = s.union(s2)
+	}
+	return s
 }
 
 func makeFollows() {
-	for nonTerminal, or := range productionsStack {
-		for _, production := range or {
+	//make followsPos
+	for nonTerminal := range nonTerminals {
+		for I, production := range productions[nonTerminal] {
 			for i, token := range production {
-				if _, finded := follows[token]; finded || token == nonTerminal { //A != c
+				//N -> alpha Y beta, N != Y
+				if token == nonTerminal ||
+					!nonTerminals.has(token) {
 					continue
 				}
-				if contains(token, nonTerminals) {
-					follows[token] = append(follows[token],
-						follow(nonTerminal, token, production[i:])...)
+				if _, ok := followsPos[token]; ok {
+					followsPos[token][nonTerminal] = []int{I, i}
+				} else {
+					followsPos[token] = map[string][]int{
+						nonTerminal:{I, i}}
 				}
 			}
+		}
+	}
+	for token, inWhichNonTerminal := range followsPos {
+		if _, exist := follows[token]; !exist {
+			s := NewSet()
+			for nonTerminal, pos := range inWhichNonTerminal {
+				s = s.union(follow(nonTerminal, token, pos))
+			}
+			follows[token] = s
 		}
 	}
 }
 
-func follow(nonTerminal, token string, production []string) []string {
-	if contains(token, terminals) {
-		return []string{token}
+func follow(nonTerminal, token string, pos []int) Set {
+	production := productions[nonTerminal][pos[0]]
+	s := NewSet()
+	if token == startSymbol {
+		s.insert("$")
 	}
-	var follow_ []string
-	if token == "expr" {
-		follow_ = append(follow_, "$")
-	}
-	//A -> Bc, follow(B) U= first(c)
-	hasTokenBehind := false
-	thatIsEpsilon := false
-	if len(production) >= 2 {
-		hasTokenBehind = true
-		rest := production[1]
-		if contains(rest, terminals) {
-			follow_ = append(follow_, rest)
-			return follow_
-		}
-		for i, production := range productions[rest] {
-			if Null(production) {
-				thatIsEpsilon = true
-			} else {
-				follow_ = append(follow_, firsts[rest][i]...)
+	if pos[1] < len(production) - 1 {
+		s = s.union(first("", production[pos[1]+1:], pos[0]))
+		//N -> alpha Y beta, Null(beta) = F,
+		//follow(Y) U= first(beta)
+		isBandC_Null := true
+		//A -> BC, Null(A) = Null(B) && Null(C)
+		for _, token := range production[pos[1]+1:] {
+			//A -> Ba|xC, since a and x, Null(A) = F
+			if terminals.has(token) {
+				isBandC_Null = false
+				break
 			}
+			isBandC_Null = isBandC_Null && null[token]
+		}
+		if !isBandC_Null {
+			return s
 		}
 	}
-
-	if hasTokenBehind && !thatIsEpsilon {
-		return follow_
-	}
-	//there is token behind and it is epsilon
-	//or there has no token behind
-
-	//A -> B || ( A -> Bc && c -> epsilon ), A != c, follow(B) U= follow(A)
-	if _, finded := follows[nonTerminal]; finded {
-		follow_ = append(follow_, follows[nonTerminal]...)
-		return follow_
-	}
-Outer:
-	for nonTerminal1, or := range productionsStack {
-		for _, production := range or {
-			for i, token2 := range production {
-				if token2 == nonTerminal && nonTerminal1 != nonTerminal { //A != c
-					follows[nonTerminal] = append(follows[nonTerminal],
-						follow(nonTerminal1, nonTerminal, production[i:])...)
-					follow_ = append(follow_, follows[nonTerminal]...)
-					break Outer
-				}
-			}
+	//N -> alpha Y beta, Null(beta) = T,
+	//follow(Y) U= first(beta) U follow(N)
+	if _, exist := follows[nonTerminal]; !exist {
+		s2 := NewSet()
+		for nonTerminal_, pos := range followsPos[nonTerminal] {
+			s2 = s2.union(follow(nonTerminal_, nonTerminal, pos))
 		}
+		follows[nonTerminal] = s2
+		return s.union(s2)
 	}
-	return follow_
+	return s.union(follows[nonTerminal])
 }
 
 func Null(production []string) bool {
