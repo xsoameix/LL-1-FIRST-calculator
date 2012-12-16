@@ -4,5 +4,5 @@ Make sure you have the a working Go environment. See the [install instructions](
 
 To run the application, simply run:
 
-    git clone git clone git@github.com:xsoameix/LL(1)-parser-generator.git
-    cd LL(1)-parser-generator && go run main.go
+    git clone git clone git@github.com:xsoameix/LL-1-parser-generator.git
+    cd LL-1-parser-generator && go run main.go
