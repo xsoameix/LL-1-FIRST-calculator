@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"stack"
+	"time"
 )
 
 var (
 	startSymbol = "expr"
+	EOF = "$"
 	productions = map[string][][]string{
 		"expr": {
 			{"term", "expr'"}},
@@ -42,8 +45,9 @@ var (
 	followsLog              = make(map[string][]bool)
 	followsPos              = make(map[string]map[string][]int)
 	nonTerminals, terminals = Set{}, Set{}
-	firsts                  = make(map[string]Set)
+	firsts                  = make(map[string][]Set)
 	follows                 = make(map[string]Set)
+	table                   = make(map[string]map[string][]string)
 	null                    = make(map[string]bool)
 )
 
@@ -98,6 +102,14 @@ func main() {
 
 	makeFollows()
 	fmt.Println("Follows\n", follows)
+
+	makeTable()
+	fmt.Println("Table\n", table)
+
+	show()
+
+	parse([]string{"digit", "+", "digit", "*", "digit"})
+	fmt.Println("parsing done")
 }
 
 func makeNonTerminals() {
@@ -116,6 +128,7 @@ func makeTerminals() {
 			}
 		}
 	}
+	terminals.insert(EOF)
 }
 
 func makeNulls() {
@@ -158,6 +171,24 @@ func makeNull(nonTerminal string) bool {
 	return isBorC_Null
 }
 
+func isNull(production []string) bool {
+	//A -> B|C|epsilon, Null(A) = T
+	if len(production) == 1 && production[0] == "epsilon" {
+		return true
+	}
+	isBandC_Null := true
+	//A -> BC, Null(A) = Null(B) && Null(C)
+	for _, token := range production {
+		//A -> Ba|xC, since a and x, Null(A) = F
+		if terminals.has(token) {
+			isBandC_Null = false
+			break
+		}
+		isBandC_Null = isBandC_Null && null[token]
+	}
+	return isBandC_Null
+}
+
 func makeFirsts() {
 	//init firstsLog = {expr:{false}, expr':{false, false}...}
 	for nonTerminal := range nonTerminals {
@@ -167,20 +198,13 @@ func makeFirsts() {
 		}
 	}
 	for nonTerminal := range nonTerminals {
-		firstFinded := true
-		for _, ok := range firstsLog[nonTerminal] {
-			if !ok {
-				firstFinded = false
+		for i, production := range productions[nonTerminal] {
+			if !firstsLog[nonTerminal][i] {
+				firsts[nonTerminal] = append(
+					firsts[nonTerminal],
+					first(nonTerminal, production, i))
 			}
 		}
-		if firstFinded {
-			continue
-		}
-		s := NewSet()
-		for i, production := range productions[nonTerminal] {
-			s = s.union(first(nonTerminal, production, i))
-		}
-		firsts[nonTerminal] = s
 	}
 }
 
@@ -203,32 +227,21 @@ func first(nonTerminal string, production []string, I int) Set {
 		return s
 	}
 	//first(alpha beta) = ?
-	for i, token := range production {
+	for _, token := range production {
+		//first(alpha) = first(alpha1) U ... U first(alpha n)
+		for i, production := range productions[token] {
+			if !firstsLog[token][i] {
+				firsts[token] = append(
+					firsts[token], first(token, production, i))
+			}
+			s = s.union(firsts[token][i])
+		}
 		//if Null(alpha) = F, first(alpha beta) = first(alpha)
 		if !null[token] {
-			if firstsLog[token][i] {
-				return firsts[token]
-			}
-			//first(alpha) = first(alpha1) U ... U first(alpha n)
-			for i, production := range productions[token] {
-				s = s.union(first(token, production, i))
-			}
-			firsts[token] = s
 			return s
 		}
 		//if Null(alpha) = T,
 		// first(alpha beta) = first(alpha) U first(beta)
-		if firstsLog[token][i] {
-			s = s.union(firsts[token])
-			continue
-		}
-		s2 := NewSet()
-		//first(beta) = first(beta1) U ... U first(beta n)
-		for i, production := range productions[token] {
-			s2 = s2.union(first(token, production, i))
-		}
-		firsts[token] = s2
-		s = s.union(s2)
 	}
 	return s
 }
@@ -247,7 +260,7 @@ func makeFollows() {
 					followsPos[token][nonTerminal] = []int{I, i}
 				} else {
 					followsPos[token] = map[string][]int{
-						nonTerminal:{I, i}}
+						nonTerminal: {I, i}}
 				}
 			}
 		}
@@ -267,9 +280,9 @@ func follow(nonTerminal, token string, pos []int) Set {
 	production := productions[nonTerminal][pos[0]]
 	s := NewSet()
 	if token == startSymbol {
-		s.insert("$")
+		s.insert(EOF)
 	}
-	if pos[1] < len(production) - 1 {
+	if pos[1] < len(production)-1 {
 		s = s.union(first("", production[pos[1]+1:], pos[0]))
 		//N -> alpha Y beta, Null(beta) = F,
 		//follow(Y) U= first(beta)
@@ -300,6 +313,33 @@ func follow(nonTerminal, token string, pos []int) Set {
 	return s.union(follows[nonTerminal])
 }
 
+func makeTable() {
+	for nonTerminal := range nonTerminals {
+		for terminal := range terminals {
+			if _, exist := table[terminal]; !exist {
+				table[terminal] = map[string][]string{
+					nonTerminal: []string{}}
+			} else {
+				table[terminal][nonTerminal] = []string{}
+			}
+		}
+	}
+	for nonTerminal, NTfirst := range firsts {
+		for i, first := range NTfirst {
+			s := NewSet()
+			s = s.union(first)
+			if isNull(productions[nonTerminal][i]) {
+				s = s.union(follows[nonTerminal])
+			}
+			for terminal := range s {
+				table[terminal][nonTerminal] = append(
+					table[terminal][nonTerminal],
+					productions[nonTerminal][i]...)
+			}
+		}
+	}
+}
+
 func Null(production []string) bool {
 	if len(production) == 1 && production[0] == "epsilon" {
 		return true
@@ -314,4 +354,47 @@ func contains(token string, lst []string) bool {
 		}
 	}
 	return false
+}
+
+func show() {
+	for terminal := range table {
+		fmt.Println("===============")
+		fmt.Println(terminal)
+		for nonTerminal, val := range table[terminal] {
+			fmt.Printf("%-10s%-5s\n", nonTerminal, val)
+		}
+	}
+}
+
+func parse(s []string) {
+	s = append(s, EOF)
+	stk := new(stack.Stack)
+	stk.Push(EOF)
+	stk.Push(startSymbol)
+	for {
+		time.Sleep(time.Second)
+		top := stk.Top()
+		fmt.Println(stk)
+		if top == "epsilon" {
+			stk.Pop()
+		}
+		if terminals.has(top) {
+			if top == EOF {
+				break
+			}
+			if top == s[0] {
+				stk.Pop()
+				s = s[1:]
+			} else {
+				fmt.Println("invalid string")
+				break
+			}
+		}
+		if nonTerminals.has(top) {
+			stk.Pop()
+			for i := len(table[s[0]][top]) - 1; i >= 0; i-- {
+				stk.Push(table[s[0]][top][i])
+			}
+		}
+	}
 }
