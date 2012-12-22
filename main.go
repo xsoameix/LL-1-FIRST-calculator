@@ -42,11 +42,11 @@ var (
 		{"0"},
 		{"1"}}}*/
 	firstsLog               = make(map[string][]bool)
-	followsLog              = make(map[string][]bool)
 	followsPos              = make(map[string]map[string][]int)
 	nonTerminals, terminals = Set{}, Set{}
 	firsts                  = make(map[string][]Set)
 	follows                 = make(map[string]Set)
+	followsFinding              = Set{}
 	table                   = make(map[string]map[string][]string)
 	null                    = make(map[string]bool)
 )
@@ -267,11 +267,16 @@ func makeFollows() {
 	}
 	for token, inWhichNonTerminal := range followsPos {
 		if _, exist := follows[token]; !exist {
+			followsFinding.insert(token)
 			s := NewSet()
 			for nonTerminal, pos := range inWhichNonTerminal {
+				if _, exist := followsFinding[nonTerminal]; exist {
+					continue
+				}
 				s = s.union(follow(nonTerminal, token, pos))
 			}
 			follows[token] = s
+			delete(followsFinding, token)
 		}
 	}
 }
@@ -303,11 +308,16 @@ func follow(nonTerminal, token string, pos []int) Set {
 	//N -> alpha Y beta, Null(beta) = T,
 	//follow(Y) U= first(beta) U follow(N)
 	if _, exist := follows[nonTerminal]; !exist {
+		followsFinding.insert(token)
 		s2 := NewSet()
 		for nonTerminal_, pos := range followsPos[nonTerminal] {
+			if _, exist := followsFinding[nonTerminal_]; exist {
+				continue
+			}
 			s2 = s2.union(follow(nonTerminal_, nonTerminal, pos))
 		}
 		follows[nonTerminal] = s2
+		delete(followsFinding, token)
 		return s.union(s2)
 	}
 	return s.union(follows[nonTerminal])
